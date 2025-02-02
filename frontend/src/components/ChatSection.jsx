@@ -60,6 +60,26 @@ export default function ChatSection() {
     }
   };
 
+  // Add this function before the return statement
+  const handleCreateCampaign = async () => {
+    try {
+      setIsLoading(true);
+      const response = await chatService.createCampaign('test-session');
+      setMessages(prev => [...prev, {
+        type: 'bot',
+        content: response.message || 'Campaign creation started!'
+      }]);
+    } catch (error) {
+      console.error('Campaign creation error:', error);
+      setMessages(prev => [...prev, {
+        type: 'bot',
+        content: 'Failed to create campaign. Please try again.'
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="chat-section">
       <div className="messages">
