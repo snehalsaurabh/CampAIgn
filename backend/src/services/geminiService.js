@@ -1,8 +1,17 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const config = require('../config/config');
 
+// Enhanced model configuration
 const genAI = new GoogleGenerativeAI(config.geminiApiKey);
-const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+const model = genAI.getGenerativeModel({ 
+  model: "gemini-pro",
+  generationConfig: {
+    temperature: 0.9,    // Increased for more creative responses
+    maxOutputTokens: 1000,  // Reduced for faster responses
+    topK: 40,
+    topP: 0.8,
+  }
+});
 
 const CHAT_STAGES = {
   INITIAL: 'initial',
@@ -14,47 +23,80 @@ const CHAT_STAGES = {
   FINAL: 'final'
 };
 
-const basePrompt = `You are an expert digital marketing and Google Ads specialist with 10+ years of experience.
-Your goal is to gather precise information to create a highly effective Google Ads campaign.
-Respond in a professional yet conversational tone.
-Ask only ONE question at a time.
-Provide brief context why you're asking each question.
-`;
+// Improved retry mechanism
+async function withRetry(fn, maxRetries = 3) {
+  let lastError;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fn();
+      if (!response) throw new Error('Empty response received');
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.log(`Attempt ${i + 1} failed:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, 2000 * (i + 1))); // Exponential backoff
+    }
+  }
+  throw new Error(`Failed after ${maxRetries} attempts. Last error: ${lastError.message}`);
+}
+
+// Chat history management
+let chatHistory = [];
 
 async function getNextQuestion(stage, previousResponses = {}) {
-  const prompt = `${basePrompt}
-Current conversation stage: ${stage}
+  const prompt = `You are an expert marketing consultant and a specialist at Google Ads campaign creation and management.
+Current stage: ${stage}
 Previous responses: ${JSON.stringify(previousResponses)}
 
-Based on this, provide:
-1. A single focused question for the ${stage} stage
-2. Brief explanation why this information matters
-3. Optional tip to help user provide better response
+Based on this context, provide ONE engaging question that:
+1. References their previous answers naturally
+2. Seeks specific information for ${stage} stage
+3. Uses a friendly, professional tone
 
-Format: JSON with fields: question, explanation, tip`;
+Response format:
+{
+  "question": "your question here",
+  "context": "brief context based on previous answers",
+  "tip": "helpful suggestion based on their situation"
+}`;
 
-  const result = await model.generateContent(prompt);
-  return JSON.parse(result.response.text());
+  try {
+    const result = await withRetry(async () => {
+      const response = await model.generateContent(prompt);
+      const text = response.response.text();
+      // Validate JSON response
+      const parsed = JSON.parse(text);
+      if (!parsed.question) throw new Error('Invalid response format');
+      return parsed;
+    });
+
+    chatHistory.push({
+      stage,
+      response: result
+    });
+
+    return result;
+  } catch (error) {
+    console.error('Error getting next question:', error);
+    throw new Error('Failed to generate question. Please try again.');
+  }
 }
 
 async function generateCampaignStrategy(responses) {
-  const prompt = `${basePrompt}
-Complete business profile:
-${JSON.stringify(responses, null, 2)}
-
-Create a comprehensive Google Ads campaign strategy including:
+  const prompt = `Based on these responses: ${JSON.stringify(responses)}
+Create a focused marketing strategy with:
 1. Campaign structure
-2. Ad copy suggestions (headlines, descriptions)
-3. Keywords and match types
-4. Bidding strategy
-5. Budget allocation
-6. Target audience segments
-7. Expected KPIs
+2. Target audience
+3. Budget allocation
+4. Key performance metrics
 
-Format as structured JSON`;
+Format as JSON.`;
 
-  const result = await model.generateContent(prompt);
-  return JSON.parse(result.response.text());
+  return await withRetry(async () => {
+    const result = await model.generateContent(prompt);
+    return JSON.parse(result.response.text());
+  });
 }
 
 module.exports = {
